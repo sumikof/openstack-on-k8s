@@ -1,0 +1,76 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keystone-init
+  namespace: k8s-openstack
+  labels:
+    k8s-app: keystone
+data:
+  keystone-init.sh: |-
+    #!/bin/bash
+    set -x
+
+    su -s /bin/bash keystone -c "keystone-manage db_sync"
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keystone-init-job
+  namespace: k8s-openstack
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init-keystone-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: keystone
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-keystone-secret
+                  key: KEYSTONE_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-keystone-secret
+                  key: KEYSTONE_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+      containers:
+        - name: keystone-db-sync
+          image: sumikof/openstack-keystone:arm
+          args: ["sh","/entrypoint/keystone-init.sh"]
+          env:
+            - name: KEYSTONE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-keystone-secret
+                  key: KEYSTONE_USER
+            - name: KEYSTONE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-keystone-secret
+                  key: KEYSTONE_PASSWORD
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: admin-secret
+                  key: OS_PASSWORD
+          volumeMounts:
+            - name: keystone-init
+              mountPath: /entrypoint/keystone-init.sh
+              subPath: keystone-init.sh
+      restartPolicy: Never
+      volumes:
+        - name: keystone-init
+          configMap:
+            name: keystone-init

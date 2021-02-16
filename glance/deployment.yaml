@@ -1,0 +1,85 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glance-entrypoint
+  namespace: k8s-openstack
+data:
+  glance-entrypoint.sh: |-
+    #!/bin/bash
+    set -x
+    render glance-api.conf /etc/glance/glance-api.conf
+
+    /etc/init.d/glance-api restart
+
+    sleep 10
+
+    tail -f /var/log/glance/glance-api.log 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-glance
+  namespace: k8s-openstack
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "openstack-api"
+spec:
+  ports:
+    - port: 9292
+  selector:
+    app: glance-api
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glance-api
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: glance-api
+  replicas: 1
+  template:
+    metadata:
+      name: glance-api
+      labels:
+        app: glance-api
+    spec:
+      containers:
+        - name: glance-api
+          image: sumikof/openstack-glance:arm
+          command: ["sh","/entrypoint/glance-entrypoint.sh"]
+          env:
+            - name: GLANCE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_USER
+            - name: GLANCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_PASSWORD
+          volumeMounts:
+          - name: glance-api-conf
+            mountPath: /template/glance-api.conf
+            readOnly: true
+            subPath: glance-api.conf
+          - name: glance-entrypoint
+            mountPath: /entrypoint/glance-entrypoint.sh
+            subPath: glance-entrypoint.sh
+          - name: glance-image
+            mountPath: /var/lib/glance/images
+          ports:
+          - containerPort: 9292
+      volumes:
+        - name: glance-api-conf
+          configMap:
+            name: glance-api-conf
+        - name: glance-entrypoint
+          configMap:
+            name: glance-entrypoint
+        - name: glance-image
+          persistentVolumeClaim:
+            claimName: glance-pvc

@@ -1,0 +1,60 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-db
+  namespace: k8s-openstack
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: openstack-db
+  clusterIP: None
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  namespace: k8s-openstack
+  name: k8s-openstack-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: rook-ceph-block
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openstack-db
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: openstack-db
+  replicas: 1
+  template:
+    metadata:
+      name: openstack-db
+      labels:
+        app: openstack-db
+    spec:
+      containers:
+        - name: openstack-db
+          image: mariadb
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+          volumeMounts:
+            - name: k8s-openstack-db-pv
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: k8s-openstack-db-pv
+          persistentVolumeClaim:
+            claimName: k8s-openstack-db-pvc

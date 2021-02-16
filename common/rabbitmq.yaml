@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-mq
+  namespace: k8s-openstack
+spec:
+  ports:
+    - port: 15672
+  selector:
+    app: openstack-mq
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openstack-mq
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: openstack-mq
+  replicas: 1
+  template:
+    metadata:
+      name: openstack-mq
+      labels:
+        app: openstack-mq
+    spec:
+      containers:
+        - name: openstack-mq
+          image: sumikof/openstack-mq:arm
+          ports:
+            - containerPort: 15672
+          env:
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: RABBITMQ_PASSWORD

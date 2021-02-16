@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-keystone
+  namespace: k8s-openstack
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "openstack-api"
+spec:
+  ports:
+    - port: 5000
+  selector:
+    app: keystone-api
+  type: LoadBalancer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keystone-entrypoint
+  namespace: k8s-openstack
+  labels:
+    k8s-app: keystone
+data:
+  entrypoint.sh: |-
+    #!/bin/bash
+    set -x
+
+    keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+    keystone-manage credential_setup --keystone-user keystone --keystone-group keystone
+
+    keystone-manage bootstrap --bootstrap-password ${ADMIN_PASSWORD} \
+      --bootstrap-admin-url http://openstack-keystone:5000/v3/ \
+      --bootstrap-internal-url http://openstack-keystone:5000/v3/ \
+        --bootstrap-public-url http://openstack-keystone:5000/v3/ \
+            --bootstrap-region-id RegionOne
+    /etc/init.d/apache2 restart
+
+    tail -f /var/log/apache2/* /var/log/keystone/*
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keystone-api
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: keystone-api
+  replicas: 1
+  template:
+    metadata:
+      name: keystone-api
+      labels:
+        app: keystone-api
+    spec:
+      containers:
+        - name: keystone-api
+          image: sumikof/openstack-keystone:arm
+          args: ["sh","/entrypoint/entrypoint.sh"]
+          env:
+          - name: ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: admin-secret
+                key: OS_PASSWORD
+          - name: KEYSTONE_USER
+            valueFrom:
+              secretKeyRef:
+                name: openstack-keystone-secret
+                key: KEYSTONE_USER
+          - name: KEYSTONE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: openstack-keystone-secret
+                key: KEYSTONE_PASSWORD
+          - name: LOG_LEVEL
+            value: DEBUG
+          volumeMounts:
+          - name: keystone-entrypoint
+            mountPath: /entrypoint/entrypoint.sh
+            readOnly: true
+            subPath: entrypoint.sh
+          ports:
+          - containerPort: 5000
+      volumes:
+      - name: keystone-entrypoint
+        configMap:
+          name: keystone-entrypoint

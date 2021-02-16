@@ -1,0 +1,34 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-memcached
+  namespace: k8s-openstack
+spec:
+  ports:
+    - port: 11211
+  selector:
+    app: openstack-memcached
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openstack-memcached
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: openstack-memcached
+  replicas: 1
+  template:
+    metadata:
+      name: openstack-memcached
+      labels:
+        app: openstack-memcached
+    spec:
+      containers:
+        - name: openstack-memcached
+          image: memcached
+          ports:
+            - containerPort: 11211

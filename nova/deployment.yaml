@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-entrypoint
+  namespace: k8s-openstack
+data:
+  nova-entrypoint.sh: |-
+    #!/bin/bash
+    set -x
+    /etc/init.d/apache2 restart
+
+    for service in api conductor scheduler consoleauth novncproxy; do /etc/init.d/nova-$service restart ; done
+
+    tail -f /var/log/apache2/*
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-nova
+  namespace: k8s-openstack
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "openstack-api"
+spec:
+  ports:
+    - port: 8774
+      name: nova-api
+    - port: 8778
+      name: nova-placement
+  selector:
+    app: nova-api
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-api
+  namespace: k8s-openstack
+spec:
+  selector:
+    matchLabels:
+      app: nova-api
+  replicas: 1
+  template:
+    metadata:
+      name: nova-api
+      labels:
+        app: nova-api
+    spec:
+      containers:
+        - name: nova-api
+          image: sumikof/openstack-nova:arm
+          args: ["sh","/entrypoint/nova-entrypoint.sh"]
+          env:
+          - name: NOVA_USER
+            valueFrom:
+              secretKeyRef:
+                name: openstack-nova-secret
+                key: NOVA_USER
+          - name: NOVA_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: openstack-nova-secret
+                key: NOVA_PASSWORD
+          - name: RABBITMQ_USER
+            valueFrom:
+              secretKeyRef:
+                name: openstack-common-secret
+                key: RABBITMQ_USER
+          - name: RABBITMQ_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: openstack-common-secret
+                key: RABBITMQ_PASSWORD
+          - name: CONTROLLER_IP
+            value: 192.168.11.200
+          volumeMounts:
+          - name: nova-entrypoint
+            mountPath: /entrypoint/nova-entrypoint.sh
+            subPath: nova-entrypoint.sh
+          ports:
+          - containerPort: 8774
+          - containerPort: 8778
+      volumes:
+        - name: nova-entrypoint
+          configMap:
+            name: nova-entrypoint

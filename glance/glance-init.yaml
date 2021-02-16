@@ -1,0 +1,113 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glance-init
+  namespace: k8s-openstack
+data:
+  glance-init.sh: |-
+    #!/bin/bash
+    set -x
+    openstack project create --domain default --description "Service Project" service
+    openstack user create --domain default --project service --password glance glance
+    openstack role add --project service --user glance admin
+    openstack service create --name glance image
+    openstack endpoint create --region RegionOne image public http://openstack-glance:9292
+    openstack endpoint create --region RegionOne image internal http://openstack-glance:9292
+    openstack endpoint create --region RegionOne image admin http://openstack-glance:9292
+
+    return 0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glance-db-sync
+  namespace: k8s-openstack
+data:
+  glance-db-sync.sh: |-
+    #!/bin/bash
+    set -x
+    render glance-api.conf /etc/glance/glance-api.conf
+
+    su -s /bin/bash glance -c "glance-manage db_sync" 
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glance-init-job
+  namespace: k8s-openstack
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: create-glance-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: glance
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+        - name: glance-keystone-init
+          image: sumikof/openstack-client:arm
+          command: ["sh","/entrypoint/glance-init.sh"]
+          envFrom:
+          - configMapRef:
+              name: admin-config
+          env:
+            - name: OS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: admin-secret
+                  key: OS_PASSWORD
+          volumeMounts:
+          - name: glance-init
+            mountPath: /entrypoint/glance-init.sh
+            subPath: glance-init.sh
+      containers:
+        - name: glance-db-sync
+          image: sumikof/openstack-glance:arm
+          command: ["sh","/entrypoint/glance-db-sync.sh"]
+          env:
+            - name: GLANCE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_USER
+            - name: GLANCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glance-secret
+                  key: GLANCE_PASSWORD
+          volumeMounts:
+          - name: glance-db-sync
+            mountPath: /entrypoint/glance-db-sync.sh
+            subPath: glance-db-sync.sh
+          - name: glance-api-conf
+            mountPath: /template/glance-api.conf
+            subPath: glance-api.conf
+      restartPolicy: Never
+      volumes:
+        - name: glance-init
+          configMap:
+            name: glance-init
+        - name: glance-db-sync
+          configMap:
+            name: glance-db-sync
+        - name: glance-api-conf
+          configMap:
+            name: glance-api-conf

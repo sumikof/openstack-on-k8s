@@ -1,0 +1,185 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-init
+  namespace: k8s-openstack
+data:
+  nova-init.sh: |-
+    #!/bin/bash
+    set -x
+    openstack user create --domain default --project service --password nova nova
+    openstack role add --project service --user nova admin
+    openstack service create --name nova --description "OpenStack Compute service" compute
+
+    openstack endpoint create --region RegionOne compute public http://openstack-nova:8774/v2.1/%\(tenant_id\)s 
+    openstack endpoint create --region RegionOne compute internal http://openstack-nova:8774/v2.1/%\(tenant_id\)s
+    openstack endpoint create --region RegionOne compute admin http://openstack-nova:8774/v2.1/%\(tenant_id\)s 
+
+    openstack user create --domain default --project service --password placement  placement
+    openstack role add --project service --user placement admin
+    openstack service create --name placement --description "OpenStack Compute Placement service" placement
+
+    openstack endpoint create --region RegionOne placement public http://openstack-nova:8778 
+    openstack endpoint create --region RegionOne placement internal http://openstack-nova:8778 
+    openstack endpoint create --region RegionOne placement admin http://openstack-nova:8778 
+
+    return 0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-db-sync
+  namespace: k8s-openstack
+data:
+  nova-db-sync.sh: |-
+    #!/bin/bash
+    set -x
+    su -s /bin/bash nova -c "nova-manage api_db sync"
+    su -s /bin/bash nova -c "nova-manage cell_v2 map_cell0"
+    su -s /bin/bash nova -c "nova-manage db sync"
+    su -s /bin/bash nova -c "nova-manage cell_v2 create_cell --name cell1"
+
+    return 0
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nova-init-job
+  namespace: k8s-openstack
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: init-nova-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: nova
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+        - name: init-nova-api-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: nova_api
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+        - name: init-nova-placement-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: nova_placement
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+        - name: init-nova-cell0-db
+          image: sumikof/openstack-initdb:arm
+          env:
+            - name: MYSQL_DATABASE
+              value: nova_cell0
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_PASSWORD
+            - name: MYSQL_HOST
+              value: openstack-db
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-common-secret
+                  key: MYSQL_ROOT_PASSWORD
+        - name: nova-keystone-init
+          image: sumikof/openstack-client:arm
+          args: ["sh","/entrypoint/nova-init.sh"]
+          envFrom:
+            - configMapRef:
+                name: admin-config
+          env:
+            - name: OS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: admin-secret
+                  key: OS_PASSWORD
+          volumeMounts:
+            - name: nova-init
+              mountPath: /entrypoint/nova-init.sh
+              subPath: nova-init.sh
+      containers:
+        - name: nova-db-sync
+          image: sumikof/openstack-nova:arm
+          args: ["sh","/entrypoint/nova-db-sync.sh"]
+          env:
+            - name: NOVA_USER
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_USER
+            - name: NOVA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openstack-nova-secret
+                  key: NOVA_PASSWORD
+          volumeMounts:
+            - name: nova-db-sync
+              mountPath: /entrypoint/nova-db-sync.sh
+              subPath: nova-db-sync.sh
+      restartPolicy: Never
+      volumes:
+        - name: nova-init
+          configMap:
+            name: nova-init
+        - name: nova-db-sync
+          configMap:
+            name: nova-db-sync
+  backoffLimit: 4
